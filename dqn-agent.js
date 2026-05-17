@@ -594,7 +594,9 @@
     renderCheckpoints();
   }
 
-  // Line chart of score per episode: faint raw trace + bright moving average.
+  // Line chart of score per episode — sliding window of the last CHART_WINDOW
+  // episodes: faint raw trace + bright moving average.
+  const CHART_WINDOW = 50;
   function drawChart() {
     const cv = ui && ui.querySelector('#rl-chart');
     if (!cv) return;
@@ -610,9 +612,11 @@
       ctx.fillText('no episodes yet', 8, H / 2);
       return;
     }
-    const n = scores.length;
+    const view = scores.slice(-CHART_WINDOW);     // only the last N episodes
+    const n = view.length;
+    const firstEp = episode - n + 1;              // episode number of view[0]
     let maxV = 1;
-    for (let i = 0; i < n; i++) if (scores[i] > maxV) maxV = scores[i];
+    for (let i = 0; i < n; i++) if (view[i] > maxV) maxV = view[i];
     const xAt = (i) => 2 + (n > 1 ? i / (n - 1) : 0) * (W - 4);
     const yAt = (v) => H - 3 - (v / maxV) * (H - 14);
 
@@ -621,20 +625,20 @@
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let i = 0; i < n; i++) {
-      const x = xAt(i), y = yAt(scores[i]);
+      const x = xAt(i), y = yAt(view[i]);
       i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     }
     ctx.stroke();
 
-    // moving average
-    const win = Math.max(1, Math.floor(n / 40));
+    // moving average over the visible window
+    const win = Math.max(1, Math.floor(n / 8));
     ctx.strokeStyle = '#7fd';
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     let sum = 0;
     for (let i = 0; i < n; i++) {
-      sum += scores[i];
-      if (i >= win) sum -= scores[i - win];
+      sum += view[i];
+      if (i >= win) sum -= view[i - win];
       const avg = sum / Math.min(i + 1, win);
       const x = xAt(i), y = yAt(avg);
       i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
@@ -645,7 +649,7 @@
     ctx.fillStyle = '#888';
     ctx.font = '9px monospace';
     ctx.fillText('max ' + maxV, 3, 10);
-    const epLbl = 'ep ' + n;
+    const epLbl = 'ep ' + firstEp + '-' + episode;
     ctx.fillText(epLbl, W - ctx.measureText(epLbl).width - 3, H - 3);
   }
 
