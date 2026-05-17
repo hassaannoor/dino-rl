@@ -219,6 +219,8 @@
   let bestScore = 0;
   let lossAvg = 0;               // running average Huber loss
   let epsilon = EPS_START;
+  let scores = [];               // per-episode score history (for the graph)
+  const SCORE_HISTORY_CAP = 4000;
 
   function pushReplay(tr) {
     if (replay.length < REPLAY_CAP) replay.push(tr);
@@ -285,6 +287,7 @@
       episode    = raw.episode    || 0;
       bestScore  = raw.bestScore  || 0;
       totalSteps = raw.totalSteps || 0;
+      scores     = raw.scores     || [];
       if (raw.speed)   speed   = raw.speed;
       if (raw.rewards) rewards = raw.rewards;
     } catch (e) {/* fresh start */}
@@ -295,7 +298,7 @@
   function save() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        net: netToJSON(online), episode, bestScore, totalSteps, speed, rewards
+        net: netToJSON(online), episode, bestScore, totalSteps, speed, rewards, scores
       }));
     } catch (e) {/* storage disabled */}
   }
@@ -321,7 +324,8 @@
       episode: episode,
       bestScore: bestScore,
       totalSteps: totalSteps,
-      rewards: Object.assign({}, rewards)
+      rewards: Object.assign({}, rewards),
+      scores: scores.slice()
     });
     saveCheckpoints();
     renderCheckpoints();
@@ -337,6 +341,7 @@
     episode    = c.episode    || 0;
     bestScore  = c.bestScore  || 0;
     totalSteps = c.totalSteps || 0;
+    scores     = (c.scores || []).slice();
     if (c.rewards) rewards = Object.assign({}, c.rewards);
     epsilon = curEpsilon();
     prevX = null; prevA = null; episodeScore = 0;
@@ -372,6 +377,8 @@
   function endEpisode() {
     episode++;
     if (episodeScore > bestScore) bestScore = episodeScore;
+    scores.push(episodeScore);
+    if (scores.length > SCORE_HISTORY_CAP) scores.shift();
     save();
   }
 
@@ -519,6 +526,9 @@
       '<b style="color:#7fd">Dino DQN agent</b>' +
       '<div style="color:#888;font-size:10px">Double-DQN · replay · target net</div>' +
       '<div id="rl-stats" style="margin:6px 0"></div>' +
+      '<div style="color:#7fd;margin-bottom:3px">Score / episode</div>' +
+      '<canvas id="rl-chart" width="216" height="84" ' +
+        'style="width:100%;display:block;background:#1a1a1a;border-radius:4px"></canvas>' +
       hr +
       '<div style="margin-bottom:4px">' +
         row('<span>Game speed</span>',
@@ -574,6 +584,7 @@
       online = makeNet(LAYOUT); target = makeNet(LAYOUT); copyNet(online, target);
       replay = []; replayHead = 0;
       episode = 0; bestScore = 0; totalSteps = 0; trainSteps = 0; lossAvg = 0;
+      scores = [];
       epsilon = EPS_START;
       prevX = null; prevA = null; episodeScore = 0;
       save();
@@ -583,10 +594,70 @@
     renderCheckpoints();
   }
 
+  // Line chart of score per episode: faint raw trace + bright moving average.
+  function drawChart() {
+    const cv = ui && ui.querySelector('#rl-chart');
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    if (scores.length < 2) {
+      ctx.fillStyle = '#888';
+      ctx.font = '10px monospace';
+      ctx.fillText('no episodes yet', 8, H / 2);
+      return;
+    }
+    const n = scores.length;
+    let maxV = 1;
+    for (let i = 0; i < n; i++) if (scores[i] > maxV) maxV = scores[i];
+    const xAt = (i) => 2 + (n > 1 ? i / (n - 1) : 0) * (W - 4);
+    const yAt = (v) => H - 3 - (v / maxV) * (H - 14);
+
+    // raw scores
+    ctx.strokeStyle = '#3a6';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = xAt(i), y = yAt(scores[i]);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+
+    // moving average
+    const win = Math.max(1, Math.floor(n / 40));
+    ctx.strokeStyle = '#7fd';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      sum += scores[i];
+      if (i >= win) sum -= scores[i - win];
+      const avg = sum / Math.min(i + 1, win);
+      const x = xAt(i), y = yAt(avg);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+
+    // labels
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.fillText('max ' + maxV, 3, 10);
+    const epLbl = 'ep ' + n;
+    ctx.fillText(epLbl, W - ctx.measureText(epLbl).width - 3, H - 3);
+  }
+
+  let lastCharted = -1;
   function refreshUI() {
     requestAnimationFrame(refreshUI);
     const stats = ui && ui.querySelector('#rl-stats');
     if (!stats) return;
+    if (scores.length !== lastCharted) {     // redraw only when a new episode ends
+      lastCharted = scores.length;
+      drawChart();
+    }
     const phase = replay.length < REPLAY_WARMUP
       ? 'warmup ' + replay.length + '/' + REPLAY_WARMUP
       : 'training';
